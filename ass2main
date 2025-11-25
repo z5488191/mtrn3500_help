@@ -1,28 +1,43 @@
-// Display-only test (no real LiDAR)
+// Main.cpp  (LiDAR + Display test harness)
+
 #using <System.dll>
+#include "LiDAR.h"
 #include "Display.h"
 
 using namespace System;
 using namespace System::Threading;
 using namespace System::Net::Sockets;
 
+// optional helper for printing some points
+void PrintLiDARPoints(SM_LiDAR^ smLiDAR, int count)
+{
+    int n = Math::Min(count, STANDARD_LASER_LENGTH);
+    for (int i = 0; i < n; i++)
+    {
+        Console::WriteLine("LiDAR[{0}] x={1:F1} y={2:F1}",
+            i, smLiDAR->x[i], smLiDAR->y[i]);
+    }
+}
+
 int main(array<String^>^ args)
 {
-    // shared memory
-    SM_ThreadManagement^ smTM = gcnew SM_ThreadManagement;
-    SM_LiDAR^ smLiDAR = gcnew SM_LiDAR;
-    SM_GNSS^ smGNSS = gcnew SM_GNSS;
+    // shared memory objects
+    SM_ThreadManagement^ smTM  = gcnew SM_ThreadManagement;
+    SM_LiDAR^            smLiDAR = gcnew SM_LiDAR;
+    SM_GNSS^             smGNSS  = gcnew SM_GNSS;
 
-    smTM->shutdown = 0;
+    smTM->shutdown  = 0;
     smTM->heartbeat = 0;
     smTM->ThreadBarrier = gcnew Barrier(1);
 
-    // create Display module
-    Display^ disp = gcnew Display(smTM, smLiDAR, smGNSS);
+    // modules
+    LiDAR^   lidar = gcnew LiDAR(smTM, smLiDAR);
+    Display^ disp  = gcnew Display(smTM, smLiDAR, smGNSS);
 
-    Console::WriteLine("Running DISPLAY test with FakeLiDAR");
-
-    // connect to MATLAB display engine
+    //------------------------------------------------------------------
+    // connect Display to MATLAB
+    //------------------------------------------------------------------
+    Console::WriteLine("Connecting Display to MATLAB on 127.0.0.1:28000");
     if (disp->connect("127.0.0.1", 28000) != SUCCESS)
     {
         Console::WriteLine("Display connect failed");
@@ -30,22 +45,61 @@ int main(array<String^>^ args)
         return -1;
     }
 
-    // send fake data a few times
-    for (int i = 0; i < 100; i++)
+    //------------------------------------------------------------------
+    // connect to real LiDAR service
+    //------------------------------------------------------------------
+    Console::WriteLine("Connecting LiDAR to WEEDER");
+    if (lidar->connect(gcnew String(WEEDER_ADDRESS), 23000) != SUCCESS)
     {
-        // fill SM_LiDAR with fake data
-        disp->FakeLiDAR();
+        Console::WriteLine("LiDAR connect failed");
+        Console::ReadLine();
+        return -1;
+    }
 
-        // pretend heartbeat
+    Console::WriteLine("Real LiDAR plus Display test running");
+    Console::WriteLine("Make sure MATLAB display engine is already running");
+
+    // toggle this define to pick fake or real
+    bool useFakeLiDAR = false;   // set true to push fake data instead
+
+    for (int i = 0; i < 200; i++)
+    {
         smTM->heartbeat |= bit_Display;
 
-        // send to MATLAB
-        disp->communicate();
+        if (useFakeLiDAR)
+        {
+            //----------------------------------------------------------
+            // MODE 1: fake LiDAR into display
+            //----------------------------------------------------------
+            disp->FakeLiDAR();
+            disp->communicate();
+        }
+        else
+        {
+            //----------------------------------------------------------
+            // MODE 2: real LiDAR into display
+            //----------------------------------------------------------
+            error_state commResult = lidar->communicate();
+            if (commResult == ERR_CONNECTION)
+            {
+                Console::WriteLine("LiDAR connection lost");
+                break;
+            }
+
+            if (commResult == SUCCESS && lidar->checkData() == SUCCESS)
+            {
+                lidar->processSharedMemory();
+                // optional debug
+                // PrintLiDARPoints(smLiDAR, 10);
+            }
+
+            disp->communicate();
+        }
 
         Thread::Sleep(50);
     }
 
-    Console::WriteLine("Display test complete, press Enter to exit");
+    Console::WriteLine("Test finished, press Enter to exit");
     Console::ReadLine();
     return 0;
 }
