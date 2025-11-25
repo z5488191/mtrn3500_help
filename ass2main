@@ -1,15 +1,51 @@
+// Display-only test (no real LiDAR)
+#using <System.dll>
 #include "Display.h"
-#include <conio.h> #include <LiDAR.h>
+
 using namespace System;
-using namespace System:: Threading;
-int main (void){
-LiDAR^ LMS151 = gcnew LiDAR(nullptr,
-nullptr);
-LMS151->connect ("192.168.0.1", 2111);
-while (!_kbhit())
-LMS151->communicate();
-Thread:: Sleep (50);
-Console:: ReadKey);
-Console:: ReadKey);
-return 0;
+using namespace System::Threading;
+using namespace System::Net::Sockets;
+
+int main(array<String^>^ args)
+{
+    // shared memory
+    SM_ThreadManagement^ smTM = gcnew SM_ThreadManagement;
+    SM_LiDAR^ smLiDAR = gcnew SM_LiDAR;
+    SM_GNSS^ smGNSS = gcnew SM_GNSS;
+
+    smTM->shutdown = 0;
+    smTM->heartbeat = 0;
+    smTM->ThreadBarrier = gcnew Barrier(1);
+
+    // create Display module
+    Display^ disp = gcnew Display(smTM, smLiDAR, smGNSS);
+
+    Console::WriteLine("Running DISPLAY test with FakeLiDAR");
+
+    // connect to MATLAB display engine
+    if (disp->connect("127.0.0.1", 28000) != SUCCESS)
+    {
+        Console::WriteLine("Display connect failed");
+        Console::ReadLine();
+        return -1;
+    }
+
+    // send fake data a few times
+    for (int i = 0; i < 100; i++)
+    {
+        // fill SM_LiDAR with fake data
+        disp->FakeLiDAR();
+
+        // pretend heartbeat
+        smTM->heartbeat |= bit_Display;
+
+        // send to MATLAB
+        disp->communicate();
+
+        Thread::Sleep(50);
+    }
+
+    Console::WriteLine("Display test complete, press Enter to exit");
+    Console::ReadLine();
+    return 0;
 }
