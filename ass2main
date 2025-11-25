@@ -1,28 +1,38 @@
-// Main.cpp  (LiDAR + Display test harness)
+// Main.cpp
 
 #using <System.dll>
+#include "TMM.h"
 #include "LiDAR.h"
 #include "Display.h"
+#include "GNSS.h"
 
 using namespace System;
 using namespace System::Threading;
-using namespace System::Net::Sockets;
 
-// optional helper for printing some points
-void PrintLiDARPoints(SM_LiDAR^ smLiDAR, int count)
+//-----------------------------------------
+// Helper: full system via ThreadManagement
+//-----------------------------------------
+void RunTMM()
 {
-    int n = Math::Min(count, STANDARD_LASER_LENGTH);
-    for (int i = 0; i < n; i++)
+    ThreadManagement^ tmm = gcnew ThreadManagement();
+
+    if (tmm->setupSharedMemory() != SUCCESS)
     {
-        Console::WriteLine("LiDAR[{0}] x={1:F1} y={2:F1}",
-            i, smLiDAR->x[i], smLiDAR->y[i]);
+        Console::WriteLine("Failed to set up shared memory");
+        Console::ReadLine();
+        return;
     }
+
+    // This starts LiDAR, GNSS, Display threads (and later Controller, VehicleControl, CrashAvoidance)
+    tmm->threadFunction();
 }
 
-int main(array<String^>^ args)
+//-----------------------------------------
+// Test 1: Display + FakeLiDAR -> MATLAB
+//-----------------------------------------
+void RunTest_DisplayFake()
 {
-    // shared memory objects
-    SM_ThreadManagement^ smTM  = gcnew SM_ThreadManagement;
+    SM_ThreadManagement^ smTM   = gcnew SM_ThreadManagement;
     SM_LiDAR^            smLiDAR = gcnew SM_LiDAR;
     SM_GNSS^             smGNSS  = gcnew SM_GNSS;
 
@@ -30,76 +40,170 @@ int main(array<String^>^ args)
     smTM->heartbeat = 0;
     smTM->ThreadBarrier = gcnew Barrier(1);
 
-    // modules
+    Display^ disp = gcnew Display(smTM, smLiDAR, smGNSS);
+
+    Console::WriteLine("Running DISPLAY test with FakeLiDAR");
+    Console::WriteLine("Make sure MATLAB display script is running");
+
+    if (disp->connect("127.0.0.1", 28000) != SUCCESS)
+    {
+        Console::WriteLine("Display connect failed");
+        Console::ReadLine();
+        return;
+    }
+
+    for (int i = 0; i < 200; ++i)
+    {
+        smTM->heartbeat |= bit_Display;
+
+        // fill SM_LiDAR with fake data
+        disp->FakeLiDAR();
+
+        // send to MATLAB
+        disp->communicate();
+
+        Thread::Sleep(50);
+    }
+
+    Console::WriteLine("Display FakeLiDAR test complete, press Enter to exit");
+    Console::ReadLine();
+}
+
+//-----------------------------------------------------
+// Test 2: Real LiDAR + Display -> MATLAB point cloud
+//-----------------------------------------------------
+void RunTest_LiDARDisplayReal()
+{
+    SM_ThreadManagement^ smTM   = gcnew SM_ThreadManagement;
+    SM_LiDAR^            smLiDAR = gcnew SM_LiDAR;
+    SM_GNSS^             smGNSS  = gcnew SM_GNSS;
+
+    smTM->shutdown  = 0;
+    smTM->heartbeat = 0;
+    smTM->ThreadBarrier = gcnew Barrier(1);
+
     LiDAR^   lidar = gcnew LiDAR(smTM, smLiDAR);
     Display^ disp  = gcnew Display(smTM, smLiDAR, smGNSS);
 
-    //------------------------------------------------------------------
-    // connect Display to MATLAB
-    //------------------------------------------------------------------
     Console::WriteLine("Connecting Display to MATLAB on 127.0.0.1:28000");
     if (disp->connect("127.0.0.1", 28000) != SUCCESS)
     {
         Console::WriteLine("Display connect failed");
         Console::ReadLine();
-        return -1;
+        return;
     }
 
-    //------------------------------------------------------------------
-    // connect to real LiDAR service
-    //------------------------------------------------------------------
-    Console::WriteLine("Connecting LiDAR to WEEDER");
+    Console::WriteLine("Connecting LiDAR to WEEDER on {0}:23000",
+        gcnew String(WEEDER_ADDRESS));
     if (lidar->connect(gcnew String(WEEDER_ADDRESS), 23000) != SUCCESS)
     {
         Console::WriteLine("LiDAR connect failed");
         Console::ReadLine();
-        return -1;
+        return;
     }
 
-    Console::WriteLine("Real LiDAR plus Display test running");
-    Console::WriteLine("Make sure MATLAB display engine is already running");
+    Console::WriteLine("Real LiDAR + Display test running");
+    Console::WriteLine("Make sure LiDAR service is running on the weeder VM");
 
-    // toggle this define to pick fake or real
-    bool useFakeLiDAR = false;   // set true to push fake data instead
-
-    for (int i = 0; i < 200; i++)
+    for (int i = 0; i < 200; ++i)
     {
+        // LiDAR step
+        smTM->heartbeat |= bit_LiDAR;
+
+        error_state commResult = lidar->communicate();
+        if (commResult == ERR_CONNECTION)
+        {
+            Console::WriteLine("LiDAR connection lost");
+            break;
+        }
+
+        if (commResult == SUCCESS && lidar->checkData() == SUCCESS)
+        {
+            lidar->processSharedMemory();
+        }
+
+        // Display step
         smTM->heartbeat |= bit_Display;
-
-        if (useFakeLiDAR)
-        {
-            //----------------------------------------------------------
-            // MODE 1: fake LiDAR into display
-            //----------------------------------------------------------
-            disp->FakeLiDAR();
-            disp->communicate();
-        }
-        else
-        {
-            //----------------------------------------------------------
-            // MODE 2: real LiDAR into display
-            //----------------------------------------------------------
-            error_state commResult = lidar->communicate();
-            if (commResult == ERR_CONNECTION)
-            {
-                Console::WriteLine("LiDAR connection lost");
-                break;
-            }
-
-            if (commResult == SUCCESS && lidar->checkData() == SUCCESS)
-            {
-                lidar->processSharedMemory();
-                // optional debug
-                // PrintLiDARPoints(smLiDAR, 10);
-            }
-
-            disp->communicate();
-        }
+        disp->communicate();
 
         Thread::Sleep(50);
     }
 
-    Console::WriteLine("Test finished, press Enter to exit");
+    Console::WriteLine("LiDAR + Display test complete, press Enter to exit");
     Console::ReadLine();
+}
+
+//-----------------------------------------
+// Test 3: GNSS only – prints CRC + UTM data
+//-----------------------------------------
+void RunTest_GNSS()
+{
+    SM_ThreadManagement^ smTM  = gcnew SM_ThreadManagement;
+    SM_GNSS^             smGNSS = gcnew SM_GNSS;
+
+    smTM->shutdown  = 0;
+    smTM->heartbeat = 0;
+    smTM->ThreadBarrier = gcnew Barrier(1);
+
+    GNSS^ gnss = gcnew GNSS(smTM, smGNSS);
+
+    Console::WriteLine("Connecting GNSS to WEEDER on {0}:24000",
+        gcnew String(WEEDER_ADDRESS));
+    if (gnss->connect(gcnew String(WEEDER_ADDRESS), 24000) != SUCCESS)
+    {
+        Console::WriteLine("GNSS connect failed");
+        Console::ReadLine();
+        return;
+    }
+
+    Console::WriteLine("GNSS test running");
+    Console::WriteLine("You should see northing, easting, height, and CRCs");
+
+    for (int i = 0; i < 100; ++i)
+    {
+        smTM->heartbeat |= bit_GNSS;
+
+        error_state commResult = gnss->communicate();
+        if (commResult == ERR_CONNECTION)
+        {
+            Console::WriteLine("GNSS connection lost");
+            break;
+        }
+
+        if (commResult == SUCCESS && gnss->checkData() == SUCCESS)
+        {
+            gnss->processSharedMemory();
+
+            // also show what is in shared memory
+            Console::WriteLine("SM_GNSS: North = {0:F3} m, East = {1:F3} m, Height = {2:F3} m",
+                smGNSS->northing, smGNSS->easting, smGNSS->height);
+        }
+
+        Thread::Sleep(100);
+    }
+
+    Console::WriteLine("GNSS test complete, press Enter to exit");
+    Console::ReadLine();
+}
+
+//-----------------------------------------
+// Select which test to run
+//-----------------------------------------
+int main(array<String^>^ args)
+{
+    // Comment/uncomment the one you want to run:
+
+    // 1) Full architecture (for final demo)
+    RunTMM();
+
+    // 2) Display + fake LiDAR only (for MATLAB testing)
+    //RunTest_DisplayFake();
+
+    // 3) Real LiDAR feeding Display (for end to end LiDAR + display)
+    //RunTest_LiDARDisplayReal();
+
+    // 4) GNSS only test
+    //RunTest_GNSS();
+
     return 0;
 }
