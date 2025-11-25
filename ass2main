@@ -1,110 +1,15 @@
-// Main.cpp  (LiDAR test harness)
-
-#using <System.dll>
-#include "LiDAR.h"
-
+#include "Display.h"
+#include <conio.h> #include <LiDAR.h>
 using namespace System;
-using namespace System::Threading;
-
-// helper to fill fake LiDAR data into shared memory
-void FillFakeLiDAR(SM_LiDAR^ smLiDAR)
-{
-    // simple circle like your Display::FakeLiDAR
-    for (int i = 0; i < STANDARD_LASER_LENGTH; i++)
-    {
-        double thetaDeg = i * 0.5;
-        double thetaRad = thetaDeg * Math::PI / 180.0;
-
-        smLiDAR->y[i] = 5000.0 * Math::Sin(thetaRad);
-        smLiDAR->x[i] = -5000.0 * Math::Cos(thetaRad);
-    }
-}
-
-// helper to print the first few points
-void PrintLiDARPoints(SM_LiDAR^ smLiDAR, int count)
-{
-    int n = Math::Min(count, STANDARD_LASER_LENGTH);
-    for (int i = 0; i < n; i++)
-    {
-        Console::WriteLine("LiDAR[{0}] x={1:F1} y={2:F1}",
-            i,
-            smLiDAR->x[i],
-            smLiDAR->y[i]);
-    }
-}
-
-int main(array<String^>^ args)
-{
-    // create minimal shared memory objects
-    SM_ThreadManagement^ smTM = gcnew SM_ThreadManagement;
-    SM_LiDAR^ smLiDAR = gcnew SM_LiDAR;
-
-    smTM->shutdown  = 0;
-    smTM->heartbeat = 0;
-
-    // Barrier is not actually used in this test, but we can initialise it anyway
-    smTM->ThreadBarrier = gcnew Barrier(1);
-
-    //------------------------------------------------------------------
-    // CHOICE 1: FAKE LiDAR TEST
-    // Uncomment this block and comment out the real LiDAR block below
-    //------------------------------------------------------------------
-    /*
-    Console::WriteLine("Running FAKE LiDAR test");
-
-    FillFakeLiDAR(smLiDAR);
-    PrintLiDARPoints(smLiDAR, 20);
-
-    Console::WriteLine("Fake LiDAR test complete, press Enter to exit");
-    Console::ReadLine();
-    return 0;
-    */
-
-    //------------------------------------------------------------------
-    // CHOICE 2: REAL LiDAR TEST (talks to the LiDAR service)
-    // Leave this block enabled when you want to test the real service
-    //------------------------------------------------------------------
-
-    Console::WriteLine("Running REAL LiDAR test");
-
-    LiDAR^ lidar = gcnew LiDAR(smTM, smLiDAR);
-
-    // connect once
-    if (lidar->connect(gcnew String(WEEDER_ADDRESS), 23000) != SUCCESS)
-    {
-        Console::WriteLine("LiDAR connect failed");
-        Console::WriteLine("Press Enter to exit");
-        Console::ReadLine();
-        return -1;
-    }
-
-    // take a few scans
-    for (int i = 0; i < 5; i++)
-    {
-        Console::WriteLine("Requesting scan {0}", i);
-
-        error_state commResult = lidar->communicate();
-        if (commResult == ERR_CONNECTION)
-        {
-            Console::WriteLine("LiDAR connection lost");
-            break;
-        }
-
-        if (commResult == SUCCESS && lidar->checkData() == SUCCESS)
-        {
-            lidar->processSharedMemory();
-            // print the first 20 points from shared memory
-            PrintLiDARPoints(smLiDAR, 20);
-        }
-        else
-        {
-            Console::WriteLine("LiDAR communicate or checkData failed, result = {0}", (int)commResult);
-        }
-
-        Thread::Sleep(100);
-    }
-
-    Console::WriteLine("Real LiDAR test complete, press Enter to exit");
-    Console::ReadLine();
-    return 0;
+using namespace System:: Threading;
+int main (void){
+LiDAR^ LMS151 = gcnew LiDAR(nullptr,
+nullptr);
+LMS151->connect ("192.168.0.1", 2111);
+while (!_kbhit())
+LMS151->communicate();
+Thread:: Sleep (50);
+Console:: ReadKey);
+Console:: ReadKey);
+return 0;
 }
