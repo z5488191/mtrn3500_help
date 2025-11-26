@@ -54,7 +54,7 @@ void RunTest_DisplayFake()
 
     for (int i = 0; i < 200; ++i)
     {
-        smTM->heartbeat |= bit_Display;
+        smTM->heartbeat |= bit_DISPLAY;
 
         // fill SM_LiDAR with fake data
         disp->FakeLiDAR();
@@ -123,7 +123,7 @@ void RunTest_LiDARDisplayReal()
         }
 
         // Display step
-        smTM->heartbeat |= bit_Display;
+        smTM->heartbeat |= bit_DISPLAY;
         disp->communicate();
 
         Thread::Sleep(50);
